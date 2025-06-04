@@ -1,0 +1,8 @@
+boto3
+botocore
+requests
+dynamodb_json
+voluptuous
+simplejson
+aws_lambda_powertools
+pyhumps

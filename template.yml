@@ -1,0 +1,166 @@
+AWSTemplateFormatVersion : '2010-09-09'
+Transform:
+  - AWS::Serverless-2016-10-31
+
+Resources:
+  MyDynamoDBLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: "mff-test-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+              - lambda.amazonaws.com
+          Action:
+            - sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess"
+      Policies:
+        - PolicyName: "my-policy-test"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                  - logs:PutLogEvents
+                  - logs:GetLogEvents
+                  - logs:FilterLogEvents
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*mff*"
+              - Effect: Allow
+                Action:
+                  - dynamodb:DescribeTable
+                  - dynamodb:UpdateTable
+                  - dynamodb:BatchGetItem
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:UpdateItem
+                  - dynamodb:ListStreams
+                  - dynamodb:GetShardIterator
+                  - dynamodb:GetRecords
+                  - dynamodb:DescribeStream
+                  - dynamodb:ConditionCheckItem
+                Resource:
+                  - !GetAtt MyDynamoDBTable.Arn
+                  - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/*'
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource:
+                   - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/*"
+              - Effect: Allow
+                Action:
+                  - s3:AbortMultipartUpload
+                  - s3:GetBucketLocation
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+                  - s3:listObjects
+                Resource:
+                  - !Sub "arn:aws:s3:::*mff*"
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                  - lambda:ListVersionsByFunction
+                Resource:
+                  - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:*mff-lambda-import*"
+              - Effect: Allow
+                Action:
+                  - kinesis:GetRecords
+                  - kinesis:GetShardIterator
+                  - kinesis:ListShards
+                  - kinesis:ListStreams
+                  - kinesis:SubscribeToShard
+                  - kinesis:PutRecord
+                  - kinesis:PutRecords
+                Resource:
+                  - !GetAtt TableStream.Arn
+
+  MyS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: "mff-s3-bucket"
+
+  # dynamodb table
+  MyDynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: "my-dynamodb-table"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        -
+          AttributeName: "pk"
+          AttributeType: "S"
+        -
+          AttributeName: "sk"
+          AttributeType: "S"
+        - 
+          AttributeName: "cliente"
+          AttributeType: "S"       
+      KeySchema:
+        - AttributeName: "pk"
+          KeyType: "HASH"
+        -
+          AttributeName: "sk"
+          KeyType: "RANGE"
+      GlobalSecondaryIndexes:
+        - IndexName: "cliente-index"
+          KeySchema:
+            -
+              AttributeName: "cliente"
+              KeyType: "HASH"
+          Projection:
+            ProjectionType: 'ALL'
+        - IndexName: 'index_sk_pk'
+          KeySchema:
+            -
+              AttributeName: "sk"
+              KeyType: "HASH"
+            -
+              AttributeName: "pk"
+              KeyType: "RANGE"
+          Projection:
+            ProjectionType: 'ALL'
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      KinesisStreamSpecification:
+        StreamArn: !GetAtt TableStream.Arn
+
+
+  TableStream:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: "my-table-stream"
+      RetentionPeriodHours: "24"
+      StreamModeDetails:
+        StreamMode: ON_DEMAND
+
+
+  S3DataImport:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: python3.11
+      Handler: data_import.handler
+      FunctionName: "mff-lambda-import"
+      CodeUri: ./build
+      Timeout: 300
+      Role: !GetAtt MyDynamoDBLambdaRole.Arn
+      Events:
+        UploadCSV:
+          Type: S3
+          Properties:
+            Bucket: !Ref MyS3Bucket
+            Events: s3:ObjectCreated:*
